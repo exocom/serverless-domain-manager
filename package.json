@@ -1,15 +1,15 @@
 {
-  "name": "serverless-domain-manager",
-  "version": "2.3.7",
+  "name": "@kalarrs/serverless-domain-manager",
+  "version": "2.4.0",
   "engines": {
     "node": ">=4.0"
   },
   "description": "Serverless plugin for managing custom domains with API Gateways.",
-  "author": "Amplify Education Inc",
+  "author": "exocom",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/amplify-education/serverless-domain-manager"
+    "url": "https://github.com/exocom/serverless-domain-manager"
   },
   "keywords": [
     "serverless plugin custom domain",

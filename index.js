@@ -1,6 +1,5 @@
 'use strict';
 
-const AWS = require('aws-sdk');
 const chalk = require('chalk');
 const DomainResponse = require('./DomainResponse');
 

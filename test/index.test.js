@@ -181,7 +181,7 @@ describe('Custom Domain Plugin', () => {
       const noStagePlugin = constructPlugin('');
       noStagePlugin.addResources();
       const cf = noStagePlugin.serverless.service.provider.compiledCloudFormationTemplate.Resources;
-      expect(cf.PathMapping).to.be.undefined;
+      expect(cf.PathMapping).to.equal(undefined);
     });
   });
 

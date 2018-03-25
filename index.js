@@ -296,7 +296,6 @@ class ServerlessCustomDomain {
       RestApiId: restApiId || {
         Ref: 'ApiGatewayRestApi',
       },
-      DependsOn: dependsOn,
     };
 
     if (basePathMapping.stage !== '*') {

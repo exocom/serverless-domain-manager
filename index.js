@@ -1,6 +1,5 @@
 'use strict';
 
-const AWS = require('aws-sdk');
 const chalk = require('chalk');
 const DomainResponse = require('./DomainResponse');
 
@@ -38,7 +37,7 @@ class ServerlessCustomDomain {
     this.hooks = {
       'delete_domain:delete': this.deleteDomain.bind(this),
       'create_domain:create': this.createDomain.bind(this),
-      'before:deploy:deploy': this.setUpBasePathMapping.bind(this),
+      'after:package:compileEvents': this.setUpBasePathMapping.bind(this),
       'after:deploy:deploy': this.domainSummary.bind(this),
       'after:info:info': this.domainSummary.bind(this),
     };
@@ -159,12 +158,11 @@ class ServerlessCustomDomain {
       return this.migrateRecordType(domain);
     })
       .then(() => {
-        const deploymentId = this.getDeploymentId();
-        this.addResources(deploymentId);
+        this.addResources();
         this.addOutputs(domain);
       })
       .catch((err) => {
-        throw new Error(`Error: Could not set up basepath mapping. Try running sls create_domain first.\n${err}`);
+        throw new Error(`Error: Could not set up base path mapping. Try running sls create_domain first.\n  Error: ${err.message.replace(/^Error: /, '')}`);
       });
   }
 
@@ -230,49 +228,39 @@ class ServerlessCustomDomain {
   /**
    * Gets the deployment id
    */
-  getDeploymentId() {
+  getDeploymentId(stageName) {
     // Searches for the deployment id from the cloud formation template
     const cloudTemplate = this.serverless.service.provider.compiledCloudFormationTemplate;
+    const restApiId = this.serverless.service.provider.apiGatewayRestApiId;
 
     const deploymentId = Object.keys(cloudTemplate.Resources).find((key) => {
       const resource = cloudTemplate.Resources[key];
-      return resource.Type === 'AWS::ApiGateway::Deployment';
+      if (resource.Type !== 'AWS::ApiGateway::Deployment') return false;
+      return resource.Properties && resource.Properties.StageName === stageName;
     });
 
-    if (!deploymentId) {
+    if (!deploymentId && restApiId) {
+      return null;
+    } else if (!deploymentId) {
       throw new Error('Cannot find AWS::ApiGateway::Deployment');
     }
     return deploymentId;
   }
 
   /**
-   *  Adds the custom domain, stage, and basepath to the resource section
-   *  @param  deployId    Used to set the timing for creating the basepath
+   *  Adds the custom domain, stage, and base path to the resource section
    */
-  addResources(deployId) {
+  addResources() {
     const service = this.serverless.service;
+    const basePathMappings = service.custom
+      && service.custom.customDomain
+      && service.custom.customDomain.basePathMappings;
+    const restApiId = this.serverless.service.provider.apiGatewayRestApiId;
 
-    if (!service.custom.customDomain) {
-      throw new Error('Error: check that the customDomain section is defined in serverless.yml');
-    }
+    if (!Array.isArray(basePathMappings)) return;
 
-    let basePath = service.custom.customDomain.basePath;
-
-    // Check that basePath is either not set, or set to an empty string
-    if (basePath == null || basePath.trim() === '') {
-      basePath = '(none)';
-    }
-
-    let stage = service.custom.customDomain.stage;
-    /*
-    If stage is not provided, stage will be set based on the user specified value
-    or the stage value of the provider section (which defaults to dev if unset)
-    */
-    if (typeof stage === 'undefined') {
-      stage = this.options.stage || service.provider.stage;
-    }
-
-    const dependsOn = [deployId];
+    const basePathMapping = basePathMappings.find(bpm => bpm.stage === this.serverless.service.provider.stage || bpm.stage === '*');
+    if (!basePathMapping) return;
 
     // Verify the cloudFormationTemplate exists
     if (!service.provider.compiledCloudFormationTemplate) {
@@ -283,27 +271,41 @@ class ServerlessCustomDomain {
       service.provider.compiledCloudFormationTemplate.Resources = {};
     }
 
+    const cloudTemplate = service.provider.compiledCloudFormationTemplate;
+
+    let basePath = basePathMapping.basePath;
+    if (basePath == null || basePath.trim() === '') {
+      basePath = '(none)';
+    }
+
+    const dependsOn = [];
+    const deployId = this.getDeploymentId(basePathMapping.stage);
+
+    if (deployId) {
+      dependsOn.push(deployId);
+    }
     // If user define an ApiGatewayStage resources add it into the dependsOn array
     if (service.provider.compiledCloudFormationTemplate.Resources.ApiGatewayStage) {
       dependsOn.push('ApiGatewayStage');
     }
 
-    // Creates the pathmapping
-    const pathmapping = {
-      Type: 'AWS::ApiGateway::BasePathMapping',
-      DependsOn: dependsOn,
-      Properties: {
-        BasePath: basePath,
-        DomainName: this.givenDomainName,
-        RestApiId: {
-          Ref: 'ApiGatewayRestApi',
-        },
-        Stage: stage,
+    const properties = {
+      BasePath: basePath,
+      DomainName: this.givenDomainName,
+      RestApiId: restApiId || {
+        Ref: 'ApiGatewayRestApi',
       },
     };
 
-    // Creates and sets the resources
-    service.provider.compiledCloudFormationTemplate.Resources.pathmapping = pathmapping;
+    if (basePathMapping.stage !== '*') {
+      properties.Stage = basePathMapping.stage;
+    }
+
+    cloudTemplate.Resources.PathMapping = {
+      Type: 'AWS::ApiGateway::BasePathMapping',
+      DependsOn: dependsOn,
+      Properties: properties,
+    };
   }
 
   /**
@@ -371,11 +373,7 @@ class ServerlessCustomDomain {
    * Obtains the certification arn
    */
   getCertArn() {
-    const acm = new AWS.ACM({
-      region: 'us-east-1',
-    });       // us-east-1 is the only region that can be accepted (3/21)
-
-    const issuedCertArn = acm.listCertificates({ CertificateStatuses: ['ISSUED'] }).promise();
+    const issuedCertArn = this.acm.listCertificates({ CertificateStatuses: ['ISSUED'] }).promise();
 
     return issuedCertArn.then((data) => {
       if (process.env.SLS_DEBUG && Array.isArray(data.CertificateSummaryList)) {
@@ -384,7 +382,7 @@ class ServerlessCustomDomain {
       return this.findClosestCertificate(data);
     }).catch((err) => {
       // No cert found in the ISSUED status. Let's look through certs in all other statuses.
-      const certArn = acm.listCertificates().promise();
+      const certArn = this.acm.listCertificates().promise();
 
       return certArn.then((data) => {
         if (process.env.SLS_DEBUG && Array.isArray(data.CertificateSummaryList)) {
@@ -399,7 +397,7 @@ class ServerlessCustomDomain {
         const certificateName = this.serverless.service.custom.customDomain.certificateName;
 
         // The cert was found in an invalid status. Let's get the actual status.
-        const describeCert = acm.describeCertificate({
+        const describeCert = this.acm.describeCertificate({
           CertificateArn: certificateArn,
         }).promise();
 
@@ -430,10 +428,10 @@ class ServerlessCustomDomain {
       createDomainNameParams.regionalCertificateArn = givenCertificateArn;
     }
 
-      /* This will return the distributionDomainName (used in changeResourceRecordSet)
-        if the domain name already exists, the distribution domain name will be returned */
+    /* This will return the distributionDomainName (used in changeResourceRecordSet)
+      if the domain name already exists, the distribution domain name will be returned */
     return this.getDomain()
-        .catch(() => this.apigateway.createDomainName(createDomainNameParams).promise()
+      .catch(() => this.apigateway.createDomainName(createDomainNameParams).promise()
         .then(data => new DomainResponse(data)));
   }
 
@@ -539,7 +537,8 @@ class ServerlessCustomDomain {
 
       const changeRecords = this.route53.changeResourceRecordSets(params).promise();
       return changeRecords.then(() => this.serverless.cli.log('Notice: Legacy CNAME record was replaced with an A Alias record'))
-        .catch(() => { }); // Swallow the error, not an error if it doesn't exist
+        .catch(() => {
+        }); // Swallow the error, not an error if it doesn't exist
     });
   }
 
@@ -562,7 +561,7 @@ class ServerlessCustomDomain {
 
     return this.apigateway.getDomainName(getDomainNameParams).promise()
       .then(data => new DomainResponse(data), (err) => {
-        throw new Error(`Error: '${this.givenDomainName}' could not be found in API Gateway.\n${err}`);
+        throw new Error(`Error: '${this.givenDomainName}' could not be found in API Gateway.\n  Error: ${err.message.replace(/^Error: /, '')}`);
       });
   }
 }

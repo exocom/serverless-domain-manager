@@ -34,7 +34,9 @@ const constructPlugin =
 
     const serverless = {
       cli: {
-        log(params) { return params; },
+        log(params) {
+          return params;
+        },
         consoleLog(params) {
           return params;
         },
@@ -57,6 +59,9 @@ const constructPlugin =
             Resources: {
               Deployment0: {
                 Type: 'AWS::ApiGateway::Deployment',
+                Properties: {
+                  StageName: stage || 'test',
+                },
               },
             },
           },
@@ -64,9 +69,14 @@ const constructPlugin =
         },
         custom: {
           customDomain: {
-            basePath: basepath,
             domainName: 'test_domain',
             endpointType,
+            basePathMappings: [
+              {
+                basePath: basepath,
+                stage,
+              },
+            ],
           },
         },
       },
@@ -126,12 +136,12 @@ describe('Custom Domain Plugin', () => {
     let deploymentId = '';
 
     it('Find Deployment Id', () => {
-      deploymentId = plugin.getDeploymentId();
+      deploymentId = plugin.getDeploymentId(true);
       expect(deploymentId).to.equal('Deployment0');
     });
 
     it('Add Resources to Serverless Config', () => {
-      plugin.addResources(deploymentId);
+      plugin.addResources();
       const cfTemplat = plugin.serverless.service.provider.compiledCloudFormationTemplate.Resources;
       expect(cfTemplat).to.not.equal(undefined);
     });
@@ -146,32 +156,32 @@ describe('Custom Domain Plugin', () => {
       expect(cfTemplat).to.not.equal(undefined);
     });
 
-    it('(none) is added if basepath is an empty string', () => {
-      const emptyPlugin = constructPlugin('', null, true, true);
-      emptyPlugin.addResources(deploymentId);
+    it('(none) is added if base path is an empty string', () => {
+      const emptyPlugin = constructPlugin('', null, 'providerStage', true);
+      emptyPlugin.addResources();
       const cf = emptyPlugin.serverless.service.provider.compiledCloudFormationTemplate.Resources;
-      expect(cf.pathmapping.Properties.BasePath).to.equal('(none)');
+      expect(cf.PathMapping.Properties.BasePath).to.equal('(none)');
     });
 
-    it('(none) is added if no value is given for basepath (null)', () => {
-      const emptyPlugin = constructPlugin(null, null, true, true);
-      emptyPlugin.addResources(deploymentId);
+    it('(none) is added if no value is given for base path (null)', () => {
+      const emptyPlugin = constructPlugin(null, null, 'providerStage', true);
+      emptyPlugin.addResources();
       const cf = emptyPlugin.serverless.service.provider.compiledCloudFormationTemplate.Resources;
-      expect(cf.pathmapping.Properties.BasePath).to.equal('(none)');
+      expect(cf.PathMapping.Properties.BasePath).to.equal('(none)');
     });
 
-    it('(none) is added if basepath attribute is missing (undefined)', () => {
-      const emptyPlugin = constructPlugin(undefined, null, true, true);
-      emptyPlugin.addResources(deploymentId);
+    it('(none) is added if base path attribute is missing (undefined)', () => {
+      const emptyPlugin = constructPlugin(undefined, null, 'providerStage', true);
+      emptyPlugin.addResources();
       const cf = emptyPlugin.serverless.service.provider.compiledCloudFormationTemplate.Resources;
-      expect(cf.pathmapping.Properties.BasePath).to.equal('(none)');
+      expect(cf.PathMapping.Properties.BasePath).to.equal('(none)');
     });
 
     it('stage was not given', () => {
       const noStagePlugin = constructPlugin('');
-      noStagePlugin.addResources(deploymentId);
+      noStagePlugin.addResources();
       const cf = noStagePlugin.serverless.service.provider.compiledCloudFormationTemplate.Resources;
-      expect(cf.pathmapping.Properties.Stage).to.equal('providerStage');
+      expect(cf.PathMapping).to.equal(undefined);
     });
   });
 
@@ -273,17 +283,16 @@ describe('Custom Domain Plugin', () => {
 
 
   describe('Resource ApiGatewayStage overridden', () => {
-    const deploymentId = '';
     it('serverless.yml doesn\'t define explicitly the resource ApiGatewayStage', () => {
-      const plugin = constructPlugin('');
-      plugin.addResources(deploymentId);
+      const plugin = constructPlugin('', null, 'providerStage');
+      plugin.addResources();
       const cf = plugin.serverless.service.provider.compiledCloudFormationTemplate.Resources;
 
-      expect(cf.pathmapping.DependsOn).to.be.an('array').to.have.lengthOf(1);
+      expect(cf.PathMapping.DependsOn).to.be.an('array').to.have.lengthOf(1);
     });
 
     it('serverless.yml defines explicitly the resource ApiGatewayStage', () => {
-      const plugin = constructPlugin('');
+      const plugin = constructPlugin('', null, 'providerStage');
       const cf = plugin.serverless.service.provider.compiledCloudFormationTemplate.Resources;
 
       // Fake the property ApiGatewayStage
@@ -292,9 +301,9 @@ describe('Custom Domain Plugin', () => {
         Properties: {},
       };
 
-      plugin.addResources(deploymentId);
-      expect(cf.pathmapping.DependsOn).to.be.an('array').to.have.lengthOf(2);
-      expect(cf.pathmapping.DependsOn).to.include('ApiGatewayStage');
+      plugin.addResources();
+      expect(cf.PathMapping.DependsOn).to.be.an('array').to.have.lengthOf(2);
+      expect(cf.PathMapping.DependsOn).to.include('ApiGatewayStage');
     });
   });
 
@@ -428,10 +437,11 @@ describe('Custom Domain Plugin', () => {
     it('Natural order', async () => {
       AWS.mock('Route53', 'listHostedZones', (params, callback) => {
         callback(null, {
-          HostedZones: [{ Name: 'aaa.com.', Id: '/hostedzone/test_id_0' },
-          { Name: 'bbb.aaa.com.', Id: '/hostedzone/test_id_1' },
-          { Name: 'ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_2' },
-          { Name: 'ddd.ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_3' }],
+          HostedZones: [
+            { Name: 'aaa.com.', Id: '/hostedzone/test_id_0' },
+            { Name: 'bbb.aaa.com.', Id: '/hostedzone/test_id_1' },
+            { Name: 'ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_2' },
+            { Name: 'ddd.ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_3' }],
         });
       });
 
@@ -446,10 +456,11 @@ describe('Custom Domain Plugin', () => {
     it('Reverse order', async () => {
       AWS.mock('Route53', 'listHostedZones', (params, callback) => {
         callback(null, {
-          HostedZones: [{ Name: 'ddd.ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_0' },
-          { Name: 'ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_1' },
-          { Name: 'bbb.aaa.com.', Id: '/hostedzone/test_id_2' },
-          { Name: 'aaa.com.', Id: '/hostedzone/test_id_3' }],
+          HostedZones: [
+            { Name: 'ddd.ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_0' },
+            { Name: 'ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_1' },
+            { Name: 'bbb.aaa.com.', Id: '/hostedzone/test_id_2' },
+            { Name: 'aaa.com.', Id: '/hostedzone/test_id_3' }],
         });
       });
 
@@ -464,10 +475,11 @@ describe('Custom Domain Plugin', () => {
     it('Random order', async () => {
       AWS.mock('Route53', 'listHostedZones', (params, callback) => {
         callback(null, {
-          HostedZones: [{ Name: 'bbb.aaa.com.', Id: '/hostedzone/test_id_0' },
-          { Name: 'ddd.ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_1' },
-          { Name: 'ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_2' },
-          { Name: 'aaa.com.', Id: '/hostedzone/test_id_3' }],
+          HostedZones: [
+            { Name: 'bbb.aaa.com.', Id: '/hostedzone/test_id_0' },
+            { Name: 'ddd.ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_1' },
+            { Name: 'ccc.bbb.aaa.com.', Id: '/hostedzone/test_id_2' },
+            { Name: 'aaa.com.', Id: '/hostedzone/test_id_3' }],
         });
       });
 
@@ -594,6 +606,7 @@ describe('Custom Domain Plugin', () => {
       AWS.mock('ACM', 'listCertificates', certTestData);
 
       const plugin = constructPlugin('', 'cert_pending', true, true);
+      plugin.acm = new aws.ACM();
 
       return plugin.getCertArn().then(() => {
         throw new Error('Test has failed. getCertArn did not catch errors.');
@@ -608,6 +621,7 @@ describe('Custom Domain Plugin', () => {
       AWS.mock('ACM', 'describeCertificate', pendingCertTestData);
 
       const plugin = constructPlugin('', 'cert_pending', true, true);
+      plugin.acm = new aws.ACM();
 
       return plugin.getCertArn().then(() => {
         throw new Error('Test has failed. getCertArn did not catch errors.');
